@@ -1,0 +1,1498 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>KAPKAÇ 🏃 - Simiti Kaçır!</title>
+<meta property="og:title" content="KAPKAÇ 🏃 - Simiti Kaçır!">
+<meta property="og:description" content="Simiti kap, polisten kaç! Türkiye'nin en komik koşu oyunu! Arkadaşlarına meydan oku!">
+<meta property="og:image" content="https://kapkac.vercel.app/thumbnail.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a0a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Nunito', 'Arial Rounded MT Bold', Arial, sans-serif;
+    touch-action: none;
+    user-select: none;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    border-radius: 12px;
+    box-shadow: 0 0 60px #ff4e0088, 0 0 120px #ff4e0033;
+  }
+  #ui {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #shareBtn {
+    position: fixed;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #25D366, #128C7E);
+    color: white;
+    border: none;
+    border-radius: 50px;
+    padding: 12px 28px;
+    font-size: 16px;
+    font-weight: 800;
+    cursor: pointer;
+    display: none;
+    box-shadow: 0 4px 20px #25D36688;
+    z-index: 100;
+    letter-spacing: 0.5px;
+  }
+  #shareBtn:active { transform: translateX(-50%) scale(0.95); }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="shareBtn">📱 Arkadaşlarına Meydan Oku!</button>
+
+<script>
+// ==================== KAPKAÇ OYUNU ====================
+// Türkiye temalı viral endless runner
+// Tek HTML dosyası - saf canvas
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const shareBtn = document.getElementById('shareBtn');
+
+// --- BOYUTLAR ---
+let W = 480, H = 280;
+function resize() {
+  const maxW = Math.min(window.innerWidth, 900);
+  const maxH = Math.min(window.innerHeight - 60, 500);
+  const scale = Math.min(maxW / W, maxH / H);
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+  canvas.width = W;
+  canvas.height = H;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// --- OYUN DEĞİŞKENLERİ ---
+const GROUND = H - 60;
+const GRAVITY = 0.6;
+const JUMP_FORCE = -13;
+const DOUBLE_JUMP_FORCE = -11;
+
+let state = 'MENU'; // MENU, PLAYING, GAMEOVER, COMBO
+let score = 0, highScore = parseInt(localStorage.getItem('kapkac_hs') || '0');
+let frame = 0, speed = 3.5, gameTime = 0;
+let combo = 0, comboTimer = 0;
+let shakeX = 0, shakeY = 0;
+let bgOffset = 0;
+let cloudOffset = 0;
+let particles = [];
+let floatingTexts = [];
+let powerups = [];
+let powerupTimer = 0;
+let activePowerup = null;
+let activePowerupTimer = 0;
+let dayNight = 0; // 0=gündüz, 1=gece
+let dayNightTimer = 0;
+
+// --- OYUNCU ---
+const player = {
+  x: 80, y: GROUND,
+  vy: 0, vx: 0,
+  w: 32, h: 40,
+  onGround: false,
+  jumps: 0,
+  maxJumps: 2,
+  invincible: 0,
+  dead: false,
+  runFrame: 0,
+  runTimer: 0,
+  trail: [],
+  sliding: false,
+  slideTimer: 0,
+  simitCount: 0
+};
+
+// --- ENGELLER ---
+let obstacles = [];
+let obstacleCooldown = 80;
+
+// --- SİMİTLER (toplanabilir) ---
+let simits = [];
+let simitCooldown = 40;
+
+// --- ARKA PLAN ELEMANLARI ---
+let bgElements = [];
+let bgElementCooldown = 100;
+
+// --- MESAJLAR ---
+const COMBO_MSGS = [
+  'SÜPER! 🔥', 'MUHTEŞEM! ⚡', 'EFSANE! 💥', 'OLMAZ! 😱',
+  'KAPKAÇ USTASI! 🏆', 'AY AY AY! 😂', 'VAYCANINA! 🤩'
+];
+const DEATH_MSGS = [
+  'Yakalandın! 👮', 'Güvercin çarptı! 🐦', 'Takla attın! 😂',
+  'Simit düştü! 🥯', 'Polis kelepçeledi! ⛓️', 'Kaldırım taşına takıldın! 🧱'
+];
+let deathMsg = '';
+
+// ==================== ÇİZİM FONKSİYONLARI ====================
+
+function drawRoundRect(x, y, w, h, r, fill, stroke, strokeW) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = strokeW || 2; ctx.stroke(); }
+}
+
+function drawPlayer(px, py, dead, invincible, sliding, runF) {
+  if (invincible > 0 && Math.floor(invincible / 3) % 2 === 0) return;
+  
+  const blink = activePowerup === 'magnet' ? '#ffe000' : null;
+  const h = sliding ? 24 : player.h;
+  const yOff = sliding ? 16 : 0;
+  
+  ctx.save();
+  ctx.translate(px + player.w / 2, py + player.h);
+  if (dead) ctx.rotate(0.3);
+  
+  // Gölge
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(0, 2, 14, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Bacaklar (koşma animasyonu)
+  const legSwing = Math.sin(runF * 0.4) * (sliding ? 0 : 12);
+  ctx.strokeStyle = '#e85d04';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  // Sol bacak
+  ctx.beginPath();
+  ctx.moveTo(-4, -12 + yOff);
+  ctx.lineTo(-8 + legSwing * 0.5, 0);
+  ctx.stroke();
+  // Sağ bacak
+  ctx.beginPath();
+  ctx.moveTo(4, -12 + yOff);
+  ctx.lineTo(8 - legSwing * 0.5, 0);
+  ctx.stroke();
+  
+  // Ayakkabılar
+  ctx.fillStyle = '#333';
+  ctx.beginPath(); ctx.ellipse(-8 + legSwing * 0.5, 2, 5, 3, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(8 - legSwing * 0.5, 2, 5, 3, 0, 0, Math.PI * 2); ctx.fill();
+  
+  // Gövde
+  const bodyColor = blink || (activePowerup === 'shield' ? '#4fc3f7' : '#ff6b35');
+  drawRoundRect(-10, -h + yOff, 20, h - 12, 5, bodyColor, '#c0392b', 2);
+  
+  // Kollar
+  const armSwing = Math.sin(runF * 0.4) * (sliding ? 0 : 8);
+  ctx.strokeStyle = '#ff6b35';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(-10, -h + 8 + yOff);
+  ctx.lineTo(-18, -h + 18 + armSwing + yOff);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(10, -h + 8 + yOff);
+  ctx.lineTo(18, -h + 18 - armSwing + yOff);
+  ctx.stroke();
+  
+  // Simit (elde)
+  if (!dead) {
+    ctx.strokeStyle = '#c8860a';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(20, -h + 18 - armSwing + yOff, 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = '#f5cba7';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(20, -h + 18 - armSwing + yOff, 5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  
+  // Kafa
+  const headColor = '#FDBCB4';
+  ctx.fillStyle = headColor;
+  ctx.beginPath();
+  ctx.arc(0, -h - 2 + yOff, 11, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#c0392b';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  
+  // Saç
+  ctx.fillStyle = '#2c1810';
+  ctx.beginPath();
+  ctx.arc(0, -h - 8 + yOff, 9, Math.PI, 0);
+  ctx.fill();
+  
+  // Yüz
+  if (!dead) {
+    // Gözler (koşarken)
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(-4, -h - 2 + yOff, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4, -h - 2 + yOff, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1a1a2e';
+    ctx.beginPath(); ctx.arc(-3.5, -h - 2 + yOff, 1.8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4.5, -h - 2 + yOff, 1.8, 0, Math.PI * 2); ctx.fill();
+    // Gülümseme
+    ctx.strokeStyle = '#c0392b';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, -h + yOff, 5, 0.2, Math.PI - 0.2);
+    ctx.stroke();
+  } else {
+    // Ölü yüz
+    ctx.fillStyle = '#333';
+    ctx.font = '10px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('x_x', 0, -h + 2 + yOff);
+  }
+  
+  // Kırmızı bere (Türk tarzı)
+  ctx.fillStyle = '#e74c3c';
+  ctx.beginPath();
+  ctx.arc(0, -h - 8 + yOff, 10, Math.PI, 0);
+  ctx.fill();
+  ctx.fillStyle = '#c0392b';
+  ctx.fillRect(-11, -h - 9 + yOff, 22, 3);
+  
+  ctx.restore();
+}
+
+function drawObstacle(obs) {
+  ctx.save();
+  ctx.translate(obs.x + obs.w / 2, obs.y + obs.h);
+  
+  if (obs.type === 'police') {
+    // Polis memuru
+    // Gölge
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath(); ctx.ellipse(0, 2, 15, 4, 0, 0, Math.PI * 2); ctx.fill();
+    // Bacaklar
+    ctx.strokeStyle = '#1a237e';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    const lg = Math.sin(obs.animFrame * 0.4) * 10;
+    ctx.beginPath(); ctx.moveTo(-4, -12); ctx.lineTo(-8 + lg * 0.5, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(4, -12); ctx.lineTo(8 - lg * 0.5, 0); ctx.stroke();
+    // Ayakkabı
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.ellipse(-8 + lg * 0.5, 2, 5, 3, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(8 - lg * 0.5, 2, 5, 3, 0, 0, Math.PI * 2); ctx.fill();
+    // Gövde (lacivert üniforma)
+    drawRoundRect(-10, -obs.h + 2, 20, obs.h - 14, 5, '#283593', '#1a237e', 2);
+    // Kemer
+    ctx.fillStyle = '#f9a825';
+    ctx.fillRect(-10, -obs.h + 16, 20, 3);
+    // Kollar
+    ctx.strokeStyle = '#283593';
+    ctx.lineWidth = 4;
+    const ag = Math.sin(obs.animFrame * 0.4) * 8;
+    ctx.beginPath(); ctx.moveTo(-10, -obs.h + 8); ctx.lineTo(-18, -obs.h + 18 + ag); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(10, -obs.h + 8); ctx.lineTo(18, -obs.h + 18 - ag); ctx.stroke();
+    // Düdük
+    ctx.fillStyle = '#f9a825';
+    ctx.fillRect(16, -obs.h + 14, 6, 3);
+    // Kafa
+    ctx.fillStyle = '#FDBCB4';
+    ctx.beginPath(); ctx.arc(0, -obs.h - 2, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#1a237e'; ctx.lineWidth = 1.5; ctx.stroke();
+    // Polis şapkası
+    ctx.fillStyle = '#1a237e';
+    ctx.beginPath(); ctx.arc(0, -obs.h - 8, 10, Math.PI, 0); ctx.fill();
+    ctx.fillRect(-14, -obs.h - 9, 28, 4);
+    // Rozet
+    ctx.fillStyle = '#f9a825';
+    ctx.beginPath(); ctx.arc(0, -obs.h - 6, 3, 0, Math.PI * 2); ctx.fill();
+    // Yüz (kızgın)
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(-4, -obs.h - 2, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4, -obs.h - 2, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1a1a2e';
+    ctx.beginPath(); ctx.arc(-3.5, -obs.h - 2, 1.8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4.5, -obs.h - 2, 1.8, 0, Math.PI * 2); ctx.fill();
+    // Kaşlar (kızgın)
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-7, -obs.h - 6); ctx.lineTo(-1, -obs.h - 5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(7, -obs.h - 6); ctx.lineTo(1, -obs.h - 5); ctx.stroke();
+    // Ağız (kızgın)
+    ctx.strokeStyle = '#c0392b';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, -obs.h + 1, 4, Math.PI + 0.3, -0.3); ctx.stroke();
+    
+  } else if (obs.type === 'pigeon') {
+    // Güvercin
+    const flap = Math.sin(obs.animFrame * 0.5) * 8;
+    ctx.fillStyle = '#9e9e9e';
+    // Gövde
+    ctx.beginPath();
+    ctx.ellipse(0, -obs.h / 2, 14, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#757575'; ctx.lineWidth = 1; ctx.stroke();
+    // Kanatlar
+    ctx.fillStyle = '#bdbdbd';
+    ctx.beginPath();
+    ctx.moveTo(-4, -obs.h / 2);
+    ctx.lineTo(-22, -obs.h / 2 - flap);
+    ctx.lineTo(-8, -obs.h / 2 + 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(4, -obs.h / 2);
+    ctx.lineTo(22, -obs.h / 2 - flap);
+    ctx.lineTo(8, -obs.h / 2 + 4);
+    ctx.closePath();
+    ctx.fill();
+    // Kafa
+    ctx.fillStyle = '#78909c';
+    ctx.beginPath(); ctx.arc(12, -obs.h / 2 - 4, 7, 0, Math.PI * 2); ctx.fill();
+    // Göz
+    ctx.fillStyle = '#ff5722';
+    ctx.beginPath(); ctx.arc(15, -obs.h / 2 - 5, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(15.5, -obs.h / 2 - 5.5, 0.8, 0, Math.PI * 2); ctx.fill();
+    // Gaga
+    ctx.fillStyle = '#ffb300';
+    ctx.beginPath();
+    ctx.moveTo(18, -obs.h / 2 - 4);
+    ctx.lineTo(24, -obs.h / 2 - 3);
+    ctx.lineTo(18, -obs.h / 2 - 2);
+    ctx.closePath();
+    ctx.fill();
+    // Ayaklar
+    ctx.strokeStyle = '#ff7043';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-2, -4); ctx.lineTo(-4, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(2, -4); ctx.lineTo(4, 0); ctx.stroke();
+    
+  } else if (obs.type === 'cart') {
+    // Seyyar satıcı arabası (simge engel)
+    // Tekerlekler
+    ctx.fillStyle = '#5d4037';
+    ctx.beginPath(); ctx.arc(-obs.w / 2 + 8, 0, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(obs.w / 2 - 8, 0, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#3e2723'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(-obs.w / 2 + 8, 0, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(obs.w / 2 - 8, 0, 8, 0, Math.PI * 2); ctx.stroke();
+    // Araba gövdesi
+    drawRoundRect(-obs.w / 2, -obs.h + 2, obs.w, obs.h - 16, 4, '#e65100', '#bf360c', 2);
+    // Çatı
+    ctx.fillStyle = '#ff9800';
+    ctx.beginPath();
+    ctx.moveTo(-obs.w / 2 - 4, -obs.h + 2);
+    ctx.lineTo(obs.w / 2 + 4, -obs.h + 2);
+    ctx.lineTo(obs.w / 2, -obs.h - 8);
+    ctx.lineTo(-obs.w / 2, -obs.h - 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#e65100'; ctx.lineWidth = 1.5; ctx.stroke();
+    // Şerit
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(-obs.w / 2 - 4, -obs.h - 3);
+    ctx.lineTo(obs.w / 2 + 4, -obs.h - 3);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Simit resmi
+    ctx.strokeStyle = '#c8860a';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, -obs.h / 2 - 5, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#f5cba7';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -obs.h / 2 - 5, 5, 0, Math.PI * 2); ctx.stroke();
+    
+  } else if (obs.type === 'barrier') {
+    // Barikat
+    ctx.fillStyle = '#f44336';
+    drawRoundRect(-obs.w / 2, -obs.h, obs.w, obs.h, 3, '#f44336', '#b71c1c', 2);
+    ctx.fillStyle = '#fff';
+    ctx.save();
+    ctx.translate(0, -obs.h / 2);
+    ctx.rotate(-0.4);
+    ctx.fillRect(-obs.w / 2 + 2, -3, obs.w - 4, 6);
+    ctx.restore();
+    // DUR yazısı
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px Nunito, Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('DUR', 0, -obs.h / 2 + 4);
+  }
+  
+  ctx.restore();
+}
+
+function drawSimit(s) {
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  ctx.rotate(s.rot);
+  // Glow efekti
+  if (s.type === 'golden') {
+    ctx.shadowColor = '#ffd700';
+    ctx.shadowBlur = 15;
+  }
+  // Dış halka
+  ctx.strokeStyle = s.type === 'golden' ? '#ffd700' : '#c8860a';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(0, 0, 10, 0, Math.PI * 2);
+  ctx.stroke();
+  // İç halka
+  ctx.strokeStyle = s.type === 'golden' ? '#fff8e1' : '#f5cba7';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, 6, 0, Math.PI * 2);
+  ctx.stroke();
+  // Susam noktaları
+  ctx.fillStyle = s.type === 'golden' ? '#ff8f00' : '#795548';
+  const dots = 6;
+  for (let i = 0; i < dots; i++) {
+    const a = (i / dots) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * 8, Math.sin(a) * 8, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+function drawPowerup(p) {
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  const bob = Math.sin(frame * 0.08) * 3;
+  ctx.translate(0, bob);
+  
+  ctx.shadowBlur = 20;
+  
+  if (p.type === 'shield') {
+    ctx.shadowColor = '#4fc3f7';
+    ctx.strokeStyle = '#4fc3f7';
+    ctx.lineWidth = 3;
+    ctx.fillStyle = 'rgba(79, 195, 247, 0.2)';
+    // Kalkan şekli
+    ctx.beginPath();
+    ctx.moveTo(0, -14);
+    ctx.lineTo(12, -6);
+    ctx.lineTo(12, 4);
+    ctx.lineTo(0, 14);
+    ctx.lineTo(-12, 4);
+    ctx.lineTo(-12, -6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#4fc3f7';
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('🛡️', 0, 5);
+  } else if (p.type === 'magnet') {
+    ctx.shadowColor = '#ffe000';
+    ctx.fillStyle = '#ffe000';
+    ctx.font = '22px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('🧲', 0, 8);
+  } else if (p.type === 'speed') {
+    ctx.shadowColor = '#ff4081';
+    ctx.fillStyle = '#ff4081';
+    ctx.font = '22px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('⚡', 0, 8);
+  }
+  
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+function drawBackground() {
+  // Gökyüzü gradyanı
+  const isDark = dayNight > 0.5;
+  const skyTop = isDark ? '#0d0d2b' : '#87ceeb';
+  const skyBot = isDark ? '#1a1a4e' : '#e0f0ff';
+  const grad = ctx.createLinearGradient(0, 0, 0, GROUND);
+  grad.addColorStop(0, skyTop);
+  grad.addColorStop(1, skyBot);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, GROUND);
+  
+  // Güneş/Ay
+  if (!isDark) {
+    ctx.fillStyle = '#ffe082';
+    ctx.shadowColor = '#ffeb3b';
+    ctx.shadowBlur = 20;
+    ctx.beginPath();
+    ctx.arc(W - 60 + Math.sin(frame * 0.002) * 5, 40, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  } else {
+    ctx.fillStyle = '#f5f5f5';
+    ctx.shadowColor = '#e0e0e0';
+    ctx.shadowBlur = 15;
+    ctx.beginPath();
+    ctx.arc(W - 60, 40, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // Yıldızlar
+    ctx.fillStyle = '#fff';
+    for (let i = 0; i < 20; i++) {
+      const sx = ((i * 137 + bgOffset * 0.1) % W);
+      const sy = (i * 47) % (GROUND - 20);
+      const ss = Math.sin(frame * 0.05 + i) * 0.5 + 1;
+      ctx.beginPath();
+      ctx.arc(sx, sy, ss, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  
+  // Bulutlar
+  ctx.fillStyle = isDark ? 'rgba(100,100,150,0.3)' : 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < 4; i++) {
+    const cx = ((cloudOffset * 0.3 + i * 140) % (W + 80)) - 40;
+    const cy = 30 + i * 18;
+    const cs = 0.7 + i * 0.15;
+    ctx.save();
+    ctx.scale(cs, cs);
+    ctx.beginPath();
+    ctx.arc(cx / cs, cy / cs, 18, 0, Math.PI * 2);
+    ctx.arc((cx + 20) / cs, (cy - 8) / cs, 22, 0, Math.PI * 2);
+    ctx.arc((cx + 44) / cs, cy / cs, 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  
+  // Arka plan bina siluetleri
+  ctx.fillStyle = isDark ? '#1a237e' : '#b0bec5';
+  for (let i = 0; i < 6; i++) {
+    const bx = ((bgOffset * 0.2 + i * 90) % (W + 80)) - 40;
+    const bh = 50 + i * 15;
+    ctx.fillRect(bx, GROUND - bh, 60, bh);
+    // Pencereler
+    ctx.fillStyle = isDark ? '#ffe082' : '#eceff1';
+    for (let wy = 0; wy < 3; wy++) {
+      for (let wx = 0; wx < 3; wx++) {
+        if ((i + wy + wx) % 3 !== 0) {
+          ctx.fillRect(bx + 6 + wx * 16, GROUND - bh + 8 + wy * 14, 8, 8);
+        }
+      }
+    }
+    ctx.fillStyle = isDark ? '#1a237e' : '#b0bec5';
+  }
+  
+  // Cami silueti (Türkiye teması!)
+  ctx.fillStyle = isDark ? '#283593' : '#90a4ae';
+  const mosqueX = ((bgOffset * 0.15 + 250) % (W + 120)) - 60;
+  // Ana kubbe
+  ctx.beginPath();
+  ctx.arc(mosqueX, GROUND - 40, 30, Math.PI, 0);
+  ctx.fill();
+  ctx.fillRect(mosqueX - 30, GROUND - 40, 60, 40);
+  // Minareler
+  ctx.fillRect(mosqueX - 45, GROUND - 75, 10, 75);
+  ctx.fillRect(mosqueX + 35, GROUND - 75, 10, 75);
+  // Minare başlıkları
+  ctx.beginPath();
+  ctx.moveTo(mosqueX - 40, GROUND - 75);
+  ctx.lineTo(mosqueX - 35, GROUND - 90);
+  ctx.lineTo(mosqueX - 30, GROUND - 75);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(mosqueX + 40, GROUND - 75);
+  ctx.lineTo(mosqueX + 45, GROUND - 90);
+  ctx.lineTo(mosqueX + 50, GROUND - 75);
+  ctx.fill();
+  
+  // Zemin
+  const groundGrad = ctx.createLinearGradient(0, GROUND, 0, H);
+  groundGrad.addColorStop(0, '#8d6e63');
+  groundGrad.addColorStop(0.3, '#795548');
+  groundGrad.addColorStop(1, '#6d4c41');
+  ctx.fillStyle = groundGrad;
+  ctx.fillRect(0, GROUND, W, H - GROUND);
+  
+  // Zemin çizgisi
+  ctx.strokeStyle = '#a1887f';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, GROUND);
+  ctx.lineTo(W, GROUND);
+  ctx.stroke();
+  
+  // Kaldırım taşları
+  ctx.fillStyle = '#9e7c6a';
+  for (let i = 0; i < 12; i++) {
+    const tx = ((bgOffset + i * 45) % (W + 45)) - 45;
+    ctx.fillRect(tx + 2, GROUND + 4, 38, 12);
+    ctx.strokeStyle = '#795548';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(tx + 2, GROUND + 4, 38, 12);
+  }
+}
+
+function drawHUD() {
+  // Skor
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  drawRoundRect(10, 10, 120, 36, 8, 'rgba(0,0,0,0.45)', null);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px Nunito, Arial';
+  ctx.textAlign = 'left';
+  ctx.fillText('🥯 ' + score, 20, 33);
+  
+  // En yüksek skor
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  drawRoundRect(W - 130, 10, 120, 36, 8, 'rgba(0,0,0,0.45)', null);
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 12px Nunito, Arial';
+  ctx.textAlign = 'right';
+  ctx.fillText('🏆 ' + highScore, W - 18, 33);
+  
+  // Hız göstergesi
+  const speedPct = Math.min((speed - 3.5) / 6, 1);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  drawRoundRect(W / 2 - 50, 10, 100, 20, 5, 'rgba(0,0,0,0.45)', null);
+  const barColor = speedPct < 0.5 ? '#4caf50' : speedPct < 0.8 ? '#ff9800' : '#f44336';
+  ctx.fillStyle = barColor;
+  drawRoundRect(W / 2 - 48, 12, 96 * speedPct, 16, 4, barColor, null);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 9px Nunito, Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('HIZ', W / 2, 23);
+  
+  // Aktif güçlendirme
+  if (activePowerup && activePowerupTimer > 0) {
+    const pct = activePowerupTimer / 300;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    drawRoundRect(10, 52, 80, 22, 5, 'rgba(0,0,0,0.5)', null);
+    const pColor = activePowerup === 'shield' ? '#4fc3f7' : activePowerup === 'magnet' ? '#ffe000' : '#ff4081';
+    ctx.fillStyle = pColor;
+    drawRoundRect(12, 54, 76 * pct, 18, 4, pColor, null);
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px Arial';
+    ctx.textAlign = 'left';
+    const icons = { shield: '🛡️', magnet: '🧲', speed: '⚡' };
+    ctx.fillText(icons[activePowerup] + ' ' + activePowerup.toUpperCase(), 16, 67);
+  }
+  
+  // Combo göstergesi
+  if (combo >= 3) {
+    const comboAlpha = Math.min(comboTimer / 30, 1);
+    ctx.globalAlpha = comboAlpha;
+    ctx.fillStyle = '#ff4081';
+    ctx.font = 'bold 16px Nunito, Arial';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#ff4081';
+    ctx.shadowBlur = 10;
+    ctx.fillText('x' + combo + ' COMBO!', W / 2, H - 75);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ==================== PARÇACIKLAR ====================
+function spawnParticles(x, y, color, count, type) {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+    const spd = type === 'collect' ? 2 + Math.random() * 3 : 1 + Math.random() * 4;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * spd,
+      vy: Math.sin(angle) * spd - (type === 'collect' ? 2 : 0),
+      color,
+      life: 1,
+      decay: 0.03 + Math.random() * 0.03,
+      size: type === 'collect' ? 3 + Math.random() * 4 : 2 + Math.random() * 3,
+      type
+    });
+  }
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.15;
+    p.life -= p.decay;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.shadowColor = p.color;
+    ctx.shadowBlur = 5;
+    if (p.type === 'collect') {
+      // Yıldız şekli
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  });
+}
+
+// ==================== YÜZEN METİNLER ====================
+function spawnFloatingText(x, y, text, color, size) {
+  floatingTexts.push({ x, y, text, color, size: size || 16, life: 1, vy: -1.5 });
+}
+
+function updateFloatingTexts() {
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const t = floatingTexts[i];
+    t.y += t.vy;
+    t.life -= 0.02;
+    if (t.life <= 0) floatingTexts.splice(i, 1);
+  }
+}
+
+function drawFloatingTexts() {
+  floatingTexts.forEach(t => {
+    ctx.globalAlpha = t.life;
+    ctx.fillStyle = t.color;
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 3;
+    ctx.font = `bold ${t.size}px Nunito, Arial`;
+    ctx.textAlign = 'center';
+    ctx.strokeText(t.text, t.x, t.y);
+    ctx.fillText(t.text, t.x, t.y);
+    ctx.globalAlpha = 1;
+  });
+}
+
+// ==================== EKRAN SARSINTISI ====================
+function triggerShake(intensity) {
+  shakeX = (Math.random() - 0.5) * intensity * 2;
+  shakeY = (Math.random() - 0.5) * intensity * 2;
+}
+
+// ==================== ENGEL OLUŞTURMA ====================
+function spawnObstacle() {
+  const types = ['police', 'pigeon', 'cart', 'barrier'];
+  const weights = [0.35, 0.25, 0.25, 0.15];
+  let r = Math.random(), cumulative = 0, type = 'police';
+  for (let i = 0; i < types.length; i++) {
+    cumulative += weights[i];
+    if (r < cumulative) { type = types[i]; break; }
+  }
+  
+  let w, h, y;
+  if (type === 'police') { w = 32; h = 52; y = GROUND - 52; }
+  else if (type === 'pigeon') { w = 44; h = 28; y = GROUND - 80 - Math.random() * 40; }
+  else if (type === 'cart') { w = 50; h = 44; y = GROUND - 44; }
+  else { w = 36; h = 48; y = GROUND - 48; }
+  
+  obstacles.push({ x: W + 20, y, w, h, type, animFrame: 0 });
+}
+
+// ==================== SİMİT OLUŞTURMA ====================
+function spawnSimit() {
+  const isGolden = Math.random() < 0.12;
+  const y = GROUND - 20 - Math.random() * 60;
+  simits.push({
+    x: W + 20,
+    y,
+    w: 20, h: 20,
+    rot: 0,
+    type: isGolden ? 'golden' : 'normal',
+    collected: false
+  });
+}
+
+// ==================== GÜÇLENDİRME ====================
+function spawnPowerup() {
+  const types = ['shield', 'magnet', 'speed'];
+  const type = types[Math.floor(Math.random() * types.length)];
+  powerups.push({
+    x: W + 20,
+    y: GROUND - 40 - Math.random() * 50,
+    w: 30, h: 30,
+    type
+  });
+}
+
+// ==================== ÇARPIŞMA ====================
+function checkCollision(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ==================== MENÜ EKRANI ====================
+function drawMenu() {
+  drawBackground();
+  
+  // Başlık paneli
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  drawRoundRect(W / 2 - 160, 30, 320, 200, 18, 'rgba(0,0,0,0.55)', 'rgba(255,150,0,0.7)', 3);
+  
+  // Başlık
+  ctx.fillStyle = '#ff6b35';
+  ctx.font = 'bold 52px Nunito, Arial';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ff4500';
+  ctx.shadowBlur = 20;
+  ctx.fillText('KAPKAÇ', W / 2, 95);
+  ctx.shadowBlur = 0;
+  
+  // Alt başlık
+  ctx.fillStyle = '#ffe082';
+  ctx.font = 'bold 16px Nunito, Arial';
+  ctx.fillText('🥯 Simiti Kap, Polisten Kaç! 🏃', W / 2, 118);
+  
+  // En yüksek skor
+  if (highScore > 0) {
+    ctx.fillStyle = '#ffd700';
+    ctx.font = 'bold 14px Nunito, Arial';
+    ctx.fillText('🏆 En Yüksek: ' + highScore + ' simit', W / 2, 142);
+  }
+  
+  // Kontroller
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '12px Nunito, Arial';
+  ctx.fillText('⬆️ Zıpla  |  ⬇️ Kayı  |  Çift Zıplama!', W / 2, 168);
+  ctx.fillText('📱 Ekrana Dokun = Zıpla', W / 2, 186);
+  
+  // Başlat butonu (yanıp sönen)
+  const pulse = Math.sin(frame * 0.07) * 0.15 + 0.85;
+  ctx.globalAlpha = pulse;
+  drawRoundRect(W / 2 - 110, 215, 220, 44, 22, '#ff6b35', '#ff4500', 3);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px Nunito, Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('🎮 OYNAMAYA BAŞLA!', W / 2, 242);
+  ctx.globalAlpha = 1;
+  
+  // Simit animasyonu
+  for (let i = 0; i < 5; i++) {
+    const sx = 40 + i * 90;
+    const sy = H - 30 + Math.sin(frame * 0.05 + i) * 5;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(frame * 0.03 + i);
+    ctx.strokeStyle = '#c8860a';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#f5cba7';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ==================== OYUN BİTİŞ EKRANI ====================
+function drawGameOver() {
+  drawBackground();
+  
+  // Engelleri ve simitleri çiz
+  obstacles.forEach(obs => drawObstacle(obs));
+  simits.forEach(s => drawSimit(s));
+  drawParticles();
+  
+  // Karartma
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Panel
+  drawRoundRect(W / 2 - 155, H / 2 - 100, 310, 210, 16, 'rgba(20,10,40,0.95)', '#ff6b35', 3);
+  
+  // Başlık
+  ctx.fillStyle = '#ff4757';
+  ctx.font = 'bold 30px Nunito, Arial';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ff4757';
+  ctx.shadowBlur = 15;
+  ctx.fillText('YAKALANDIN! 👮', W / 2, H / 2 - 65);
+  ctx.shadowBlur = 0;
+  
+  // Ölüm mesajı
+  ctx.fillStyle = '#ffd700';
+  ctx.font = 'bold 14px Nunito, Arial';
+  ctx.fillText(deathMsg, W / 2, H / 2 - 38);
+  
+  // Skor
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px Nunito, Arial';
+  ctx.fillText('🥯 ' + score + ' simit topladın!', W / 2, H / 2 - 8);
+  
+  // En yüksek skor
+  if (score >= highScore && score > 0) {
+    ctx.fillStyle = '#ffd700';
+    ctx.font = 'bold 16px Nunito, Arial';
+    ctx.shadowColor = '#ffd700';
+    ctx.shadowBlur = 10;
+    ctx.fillText('🏆 YENİ REKOR! TEBRİKLER!', W / 2, H / 2 + 18);
+    ctx.shadowBlur = 0;
+  } else {
+    ctx.fillStyle = '#aaa';
+    ctx.font = '13px Nunito, Arial';
+    ctx.fillText('En Yüksek: 🏆 ' + highScore, W / 2, H / 2 + 18);
+  }
+  
+  // Tekrar oyna butonu
+  const pulse = Math.sin(frame * 0.08) * 0.1 + 0.9;
+  ctx.globalAlpha = pulse;
+  drawRoundRect(W / 2 - 95, H / 2 + 38, 190, 40, 20, '#ff6b35', '#ff4500', 3);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 16px Nunito, Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('🔄 TEKRAR OYNA', W / 2, H / 2 + 63);
+  ctx.globalAlpha = 1;
+  
+  // Paylaş butonu (WhatsApp)
+  drawRoundRect(W / 2 - 95, H / 2 + 85, 190, 36, 18, '#25D366', '#128C7E', 2);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px Nunito, Arial';
+  ctx.fillText('📱 Paylaş & Meydan Oku!', W / 2, H / 2 + 108);
+  
+  shareBtn.style.display = 'block';
+}
+
+// ==================== OYUN BAŞLATMA ====================
+function startGame() {
+  state = 'PLAYING';
+  score = 0;
+  frame = 0;
+  speed = 3.5;
+  gameTime = 0;
+  combo = 0;
+  comboTimer = 0;
+  obstacles = [];
+  simits = [];
+  powerups = [];
+  particles = [];
+  floatingTexts = [];
+  obstacleCooldown = 80;
+  simitCooldown = 40;
+  powerupTimer = 180;
+  activePowerup = null;
+  activePowerupTimer = 0;
+  dayNight = 0;
+  dayNightTimer = 0;
+  bgOffset = 0;
+  cloudOffset = 0;
+  
+  player.x = 80;
+  player.y = GROUND - player.h;
+  player.vy = 0;
+  player.vx = 0;
+  player.onGround = true;
+  player.jumps = 0;
+  player.invincible = 0;
+  player.dead = false;
+  player.runFrame = 0;
+  player.runTimer = 0;
+  player.trail = [];
+  player.sliding = false;
+  player.slideTimer = 0;
+  player.simitCount = 0;
+  
+  shareBtn.style.display = 'none';
+}
+
+// ==================== ATLAMA / KAYMA ====================
+function jump() {
+  if (state === 'MENU') { startGame(); return; }
+  if (state === 'GAMEOVER') { startGame(); return; }
+  if (state !== 'PLAYING') return;
+  
+  if (player.jumps < player.maxJumps) {
+    player.vy = player.jumps === 0 ? JUMP_FORCE : DOUBLE_JUMP_FORCE;
+    player.jumps++;
+    player.onGround = false;
+    // Zıplama parçacıkları
+    spawnParticles(player.x + player.w / 2, player.y + player.h, '#a1887f', 6, 'dust');
+    playSound('jump');
+  }
+}
+
+function slide() {
+  if (state !== 'PLAYING') return;
+  if (player.onGround && !player.sliding) {
+    player.sliding = true;
+    player.slideTimer = 35;
+  }
+}
+
+// ==================== SES (Web Audio API - basit) ====================
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playSound(type) {
+  try {
+    const ac = getAudioCtx();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    
+    if (type === 'jump') {
+      osc.frequency.setValueAtTime(300, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(600, ac.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.15, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.15);
+      osc.start(ac.currentTime);
+      osc.stop(ac.currentTime + 0.15);
+    } else if (type === 'collect') {
+      osc.frequency.setValueAtTime(500, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(900, ac.currentTime + 0.08);
+      gain.gain.setValueAtTime(0.12, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.12);
+      osc.start(ac.currentTime);
+      osc.stop(ac.currentTime + 0.12);
+    } else if (type === 'golden') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(800, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1400, ac.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.2, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.2);
+      osc.start(ac.currentTime);
+      osc.stop(ac.currentTime + 0.2);
+    } else if (type === 'die') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(400, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(80, ac.currentTime + 0.4);
+      gain.gain.setValueAtTime(0.2, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.4);
+      osc.start(ac.currentTime);
+      osc.stop(ac.currentTime + 0.4);
+    } else if (type === 'powerup') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(600, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1200, ac.currentTime + 0.2);
+      gain.gain.setValueAtTime(0.18, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.25);
+      osc.start(ac.currentTime);
+      osc.stop(ac.currentTime + 0.25);
+    }
+  } catch (e) {}
+}
+
+// Arka plan müziği (basit bip bop)
+let bgMusicTimer = 0;
+const bgMelody = [261, 294, 329, 349, 392, 440, 392, 349, 329, 294];
+let bgMelodyIdx = 0;
+function playBgNote() {
+  try {
+    const ac = getAudioCtx();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'square';
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    osc.frequency.value = bgMelody[bgMelodyIdx % bgMelody.length];
+    bgMelodyIdx++;
+    gain.gain.setValueAtTime(0.03, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.2);
+    osc.start(ac.currentTime);
+    osc.stop(ac.currentTime + 0.2);
+  } catch (e) {}
+}
+
+// ==================== GİRİŞ ====================
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+    e.preventDefault();
+    jump();
+  }
+  if (e.code === 'ArrowDown' || e.code === 'KeyS') {
+    e.preventDefault();
+    slide();
+  }
+});
+
+let touchStartY = 0;
+document.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  touchStartY = e.touches[0].clientY;
+  jump();
+}, { passive: false });
+
+document.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  if (dy > 30) slide();
+}, { passive: false });
+
+canvas.addEventListener('click', (e) => {
+  if (state === 'GAMEOVER') {
+    // Paylaş butonu alanı
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const scaleY = H / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top) * scaleY;
+    
+    if (cy > H / 2 + 85 && cy < H / 2 + 121) {
+      shareGame();
+      return;
+    }
+    startGame();
+    return;
+  }
+  jump();
+});
+
+// Paylaş
+shareBtn.addEventListener('click', shareGame);
+
+function shareGame() {
+  const text = `🥯 KAPKAÇ oyununda ${score} simit topladım! Sen kaç toplayabilirsin? 😂\n👉 Oyna: ${window.location.href}`;
+  if (navigator.share) {
+    navigator.share({ title: 'KAPKAÇ', text, url: window.location.href }).catch(() => {});
+  } else {
+    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
+    window.open(url, '_blank');
+  }
+}
+
+// ==================== ANA OYUN DÖNGÜSÜ ====================
+function update() {
+  frame++;
+  
+  if (state === 'MENU') {
+    bgOffset += 1;
+    cloudOffset += 0.5;
+    return;
+  }
+  
+  if (state === 'GAMEOVER') {
+    bgOffset += 0.5;
+    updateParticles();
+    updateFloatingTexts();
+    shakeX *= 0.8;
+    shakeY *= 0.8;
+    return;
+  }
+  
+  if (state !== 'PLAYING') return;
+  
+  gameTime++;
+  bgOffset += speed * 0.8;
+  cloudOffset += speed * 0.3;
+  
+  // Gece/gündüz döngüsü
+  dayNightTimer++;
+  if (dayNightTimer > 600) {
+    dayNight = Math.min(dayNight + 0.005, 1);
+    if (dayNight >= 1) { dayNightTimer = -600; }
+  } else if (dayNightTimer < 0) {
+    dayNight = Math.max(dayNight - 0.005, 0);
+  }
+  
+  // Hız artışı
+  speed = 3.5 + gameTime * 0.0012;
+  if (speed > 10) speed = 10;
+  
+  // Arka plan müziği
+  bgMusicTimer++;
+  if (bgMusicTimer > Math.max(20, 35 - gameTime * 0.01)) {
+    bgMusicTimer = 0;
+    playBgNote();
+  }
+  
+  // Güçlendirme zamanlayıcısı
+  powerupTimer--;
+  if (powerupTimer <= 0) {
+    spawnPowerup();
+    powerupTimer = 400 + Math.random() * 300;
+  }
+  
+  // Aktif güçlendirme
+  if (activePowerup) {
+    activePowerupTimer--;
+    if (activePowerupTimer <= 0) {
+      activePowerup = null;
+    }
+  }
+  
+  // Oyuncu fiziği
+  player.vy += GRAVITY;
+  player.y += player.vy;
+  
+  // Kayma
+  if (player.sliding) {
+    player.slideTimer--;
+    if (player.slideTimer <= 0) player.sliding = false;
+  }
+  
+  // Zemin kontrolü
+  const playerBottom = player.y + player.h;
+  if (playerBottom >= GROUND) {
+    player.y = GROUND - player.h;
+    player.vy = 0;
+    player.onGround = true;
+    player.jumps = 0;
+  } else {
+    player.onGround = false;
+  }
+  
+  // Koşma animasyonu
+  if (player.onGround) {
+    player.runTimer++;
+    if (player.runTimer > 3) {
+      player.runFrame++;
+      player.runTimer = 0;
+    }
+  }
+  
+  // Trail
+  if (activePowerup === 'speed') {
+    player.trail.push({ x: player.x + player.w / 2, y: player.y + player.h / 2, life: 1 });
+    if (player.trail.length > 8) player.trail.shift();
+  } else {
+    player.trail = [];
+  }
+  
+  // Sarsıntı sönümleme
+  shakeX *= 0.75;
+  shakeY *= 0.75;
+  
+  // Combo zamanlayıcı
+  if (comboTimer > 0) comboTimer--;
+  else if (combo > 0 && comboTimer <= 0) combo = 0;
+  
+  // Engel oluşturma
+  obstacleCooldown--;
+  if (obstacleCooldown <= 0) {
+    spawnObstacle();
+    obstacleCooldown = Math.max(35, 80 - gameTime * 0.05) + Math.random() * 20;
+  }
+  
+  // Simit oluşturma
+  simitCooldown--;
+  if (simitCooldown <= 0) {
+    spawnSimit();
+    simitCooldown = Math.max(20, 45 - gameTime * 0.02) + Math.random() * 15;
+  }
+  
+  // Engelleri güncelle
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    const obs = obstacles[i];
+    obs.x -= speed;
+    obs.animFrame++;
+    if (obs.x + obs.w < -10) { obstacles.splice(i, 1); continue; }
+    
+    // Çarpışma kontrolü (biraz affedici)
+    const px = player.x + 4;
+    const py = player.sliding ? player.y + 16 : player.y;
+    const ph = player.sliding ? player.h - 16 : player.h;
+    const pHitbox = { x: px, y: py, w: player.w - 8, h: ph };
+    
+    if (checkCollision(pHitbox, obs) && player.invincible <= 0) {
+      if (activePowerup === 'shield') {
+        // Kalkan kırıldı
+        activePowerup = null;
+        activePowerupTimer = 0;
+        player.invincible = 90;
+        triggerShake(6);
+        spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#4fc3f7', 12, 'collect');
+        spawnFloatingText(player.x + player.w / 2, player.y, 'KALKAN KIRIDI!', '#4fc3f7', 13);
+        playSound('powerup');
+        obstacles.splice(i, 1);
+      } else {
+        // Ölüm
+        player.dead = true;
+        player.vy = -8;
+        triggerShake(12);
+        const deathMessages = [
+          'Yakalandın! 👮', 'Güvercin çarptı! 🐦', 'Takla attın! 😂',
+          'Simit düştü! 🥯', 'Polis kelepçeledi! ⛓️', 'Kaldırım taşına takıldın! 🧱'
+        ];
+        deathMsg = deathMessages[Math.floor(Math.random() * deathMessages.length)];
+        if (obs.type === 'pigeon') deathMsg = 'Güvercin çarptı! 🐦';
+        else if (obs.type === 'police') deathMsg = 'Polis yakaladı! 👮';
+        else if (obs.type === 'cart') deathMsg = 'Arabaya çarptın! 🛒';
+        else if (obs.type === 'barrier') deathMsg = 'Barikata tosladın! 🚧';
+        spawnParticles(player.x + player.w / 2, player.y + player.h / 2, '#f44336', 16, 'collect');
+        playSound('die');
+        
+        if (score > highScore) {
+          highScore = score;
+          localStorage.setItem('kapkac_hs', highScore);
+        }
+        
+        setTimeout(() => { state = 'GAMEOVER'; }, 1200);
+        state = 'DYING';
+      }
+    }
+  }
+  
+  // Simitleri güncelle
+  for (let i = simits.length - 1; i >= 0; i--) {
+    const s = simits[i];
+    s.x -= speed;
+    s.rot += 0.08;
+    if (s.x < -20) { simits.splice(i, 1); continue; }
+    
+    // Mıknatıs etkisi
+    if (activePowerup === 'magnet') {
+      const dx = (player.x + player.w / 2) - s.x;
+      const dy = (player.y + player.h / 2) - s.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 120) {
+        s.x += dx * 0.12;
+        s.y += dy * 0.12;
+      }
+    }
+    
+    // Toplama kontrolü
+    const pHit = { x: player.x + 2, y: player.y, w: player.w - 4, h: player.h };
+    const sHit = { x: s.x - 10, y: s.y - 10, w: 20, h: 20 };
+    
+    if (checkCollision(pHit, sHit)) {
+      const pts = s.type === 'golden' ? 5 : 1;
+      score += pts;
+      player.simitCount++;
+      combo++;
+      comboTimer = 90;
+      
+      spawnParticles(s.x, s.y, s.type === 'golden' ? '#ffd700' : '#c8860a', 8, 'collect');
+      
+      if (s.type === 'golden') {
+        spawnFloatingText(s.x, s.y - 10, '+5 ALTIN! ⭐', '#ffd700', 15);
+        playSound('golden');
+        triggerShake(3);
+      } else {
+        spawnFloatingText(s.x, s.y - 10, '+1', '#c8860a', 13);
+        playSound('collect');
+      }
+      
+      if (combo >= 5) {
+        spawnFloatingText(player.x + player.w / 2, player.y - 10,
+          COMBO_MSGS[Math.floor(Math.random() * COMBO_MSGS.length)], '#ff4081', 14);
+        triggerShake(4);
+      }
+      
+      simits.splice(i, 1);
+    }
+  }
+  
+  // Güçlendirmeleri güncelle
+  for (let i = powerups.length - 1; i >= 0; i--) {
+    const p = powerups[i];
+    p.x -= speed;
+    if (p.x < -20) { powerups.splice(i, 1); continue; }
+    
+    const pHit = { x: player.x, y: player.y, w: player.w, h: player.h };
+    const puHit = { x: p.x - 15, y: p.y - 15, w: 30, h: 30 };
+    
+    if (checkCollision(pHit, puHit)) {
+      activePowerup = p.type;
+      activePowerupTimer = 300;
+      spawnParticles(p.x, p.y, p.type === 'shield' ? '#4fc3f7' : p.type === 'magnet' ? '#ffe000' : '#ff4081', 12, 'collect');
+      const names = { shield: '🛡️ KALKAN!', magnet: '🧲 MIKNATIS!', speed: '⚡ SÜPER HIZ!' };
+      spawnFloatingText(player.x + player.w / 2, player.y - 15, names[p.type], '#fff', 14);
+      playSound('powerup');
+      powerups.splice(i, 1);
+    }
+  }
+  
+  // Ölüm animasyonu
+  if (state === 'DYING') {
+    player.vy += GRAVITY;
+    player.y += player.vy;
+    player.x += 1;
+    if (player.y > H + 50) player.y = H + 50;
+  }
+  
+  updateParticles();
+  updateFloatingTexts();
+}
+
+function draw() {
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+  
+  if (state === 'MENU') {
+    drawMenu();
+    ctx.restore();
+    return;
+  }
+  
+  if (state === 'GAMEOVER') {
+    drawGameOver();
+    ctx.restore();
+    return;
+  }
+  
+  drawBackground();
+  
+  // Trail efekti
+  if (player.trail.length > 0) {
+    player.trail.forEach((t, i) => {
+      ctx.globalAlpha = (i / player.trail.length) * 0.4;
+      ctx.fillStyle = '#ff4081';
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, 8 * (i / player.trail.length), 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+  }
+  
+  // Engelleri çiz
+  obstacles.forEach(obs => drawObstacle(obs));
+  
+  // Simitleri çiz
+  simits.forEach(s => drawSimit(s));
+  
+  // Güçlendirmeleri çiz
+  powerups.forEach(p => drawPowerup(p));
+  
+  // Oyuncuyu çiz
+  drawPlayer(player.x, player.y, player.dead || state === 'DYING', player.invincible, player.sliding, player.runFrame);
+  
+  // Parçacıklar
+  drawParticles();
+  
+  // Yüzen metinler
+  drawFloatingTexts();
+  
+  // HUD
+  if (state === 'PLAYING') drawHUD();
+  
+  ctx.restore();
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
